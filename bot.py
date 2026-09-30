@@ -22,7 +22,7 @@ def send_message(text):
 
 def main():
     print("Metziot Express bot started successfully.")
-
+    send_message("TEST - Metziot Express bot is connected!")
     while True:
         time.sleep(60)
 
