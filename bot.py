@@ -11,6 +11,7 @@ ALIEXPRESS_APP_KEY = os.environ["ALIEXPRESS_APP_KEY"]
 ALIEXPRESS_APP_SECRET = os.environ["ALIEXPRESS_APP_SECRET"]
 ALIEXPRESS_TRACKING_ID = os.environ["ALIEXPRESS_TRACKING_ID"]
 
+ALIEXPRESS_URL = "https://api-sg.aliexpress.com/sync"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
@@ -28,7 +29,7 @@ def send_message(text):
     return response.json()
 
 
-def sign_aliexpress_request(api_name, params):
+def sign_aliexpress_request(params):
     params_to_sign = {
         key: str(value)
         for key, value in params.items()
@@ -37,25 +38,48 @@ def sign_aliexpress_request(api_name, params):
 
     sorted_params = sorted(params_to_sign.items())
 
-    query = api_name + "".join(
+    sign_string = "".join(
         key + value for key, value in sorted_params
     )
 
-    signature = hmac.new(
+    return hmac.new(
         ALIEXPRESS_APP_SECRET.encode("utf-8"),
-        query.encode("utf-8"),
+        sign_string.encode("utf-8"),
         hashlib.sha256
     ).hexdigest().upper()
 
-    return signature
+
+def test_aliexpress_api():
+    params = {
+        "app_key": ALIEXPRESS_APP_KEY,
+        "timestamp": str(int(time.time() * 1000)),
+        "sign_method": "sha256",
+        "method": "aliexpress.affiliate.product.query",
+        "keywords": "dog",
+        "page_no": "1",
+        "page_size": "1",
+        "ship_to_country": "IL",
+        "target_currency": "ILS",
+        "target_language": "EN"
+    }
+
+    params["sign"] = sign_aliexpress_request(params)
+
+    response = requests.get(
+        ALIEXPRESS_URL,
+        params=params,
+        timeout=30
+    )
+
+    print("AliExpress HTTP status:", response.status_code)
+    print("AliExpress response:", response.text)
 
 
 def main():
     print("Metziot Express bot started successfully.")
-    print("Telegram configuration loaded.")
-    print("AliExpress credentials loaded.")
-    print("AliExpress tracking ID loaded.")
-    print("Ready for AliExpress API test.")
+    print("Testing AliExpress API...")
+    test_aliexpress_api()
+    print("AliExpress API test finished.")
 
     while True:
         time.sleep(60)
