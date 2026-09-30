@@ -19,6 +19,21 @@ ALIEXPRESS_TRACKING_ID = os.environ["ALIEXPRESS_TRACKING_ID"]
 ALIEXPRESS_URL = "https://api-sg.aliexpress.com/sync"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# 3 hours
+POST_INTERVAL = 3 * 60 * 60
+
+# Different searches so the channel has variety
+DOG_SEARCHES = [
+    "dog toys",
+    "dog accessories",
+    "dog leash",
+    "dog collar",
+    "dog bed",
+    "dog grooming",
+    "dog bowl",
+    "dog car accessories",
+]
+
 
 # =========================
 # ALIEXPRESS SIGNATURE
@@ -46,7 +61,7 @@ def sign_aliexpress_request(params):
 
 
 # =========================
-# CALL ALIEXPRESS
+# ALIEXPRESS REQUEST
 # =========================
 
 def call_aliexpress(method, business_params):
@@ -67,23 +82,85 @@ def call_aliexpress(method, business_params):
     )
 
     print("AliExpress status:", response.status_code)
-    print("AliExpress response:", response.text)
+    print("AliExpress response:", response.text[:1000])
 
     response.raise_for_status()
-    return response.json()
+
+    data = response.json()
+
+    if "error_response" in data:
+        raise RuntimeError(
+            f"AliExpress error: {data['error_response']}"
+        )
+
+    return data
 
 
 # =========================
-# FIND PRODUCT
+# PRODUCT HELPERS
 # =========================
 
-def find_product():
+def number(value, default=0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def get_discount(product):
+    discount = number(product.get("discount"))
+
+    if discount > 0:
+        return discount
+
+    original = number(
+        product.get("target_original_price")
+        or product.get("original_price")
+    )
+
+    sale = number(
+        product.get("target_sale_price")
+        or product.get("sale_price")
+    )
+
+    if original > 0 and sale > 0 and sale < original:
+        return round((original - sale) / original * 100)
+
+    return 0
+
+
+def product_score(product):
+    discount = get_discount(product)
+
+    orders = number(
+        product.get("lastest_volume")
+        or product.get("volume")
+    )
+
+    commission = number(
+        product.get("commission_rate")
+    )
+
+    # Discount is the main priority.
+    # Sales and commission are secondary signals.
+    return (
+        discount * 10
+        + min(orders, 10000) / 100
+        + commission
+    )
+
+
+# =========================
+# FIND DEALS
+# =========================
+
+def search_products(keyword):
     data = call_aliexpress(
         "aliexpress.affiliate.product.query",
         {
-            "keywords": "dog",
+            "keywords": keyword,
             "page_no": "1",
-            "page_size": "5",
+            "page_size": "20",
             "ship_to_country": "IL",
             "target_currency": "ILS",
             "target_language": "EN",
@@ -94,17 +171,52 @@ def find_product():
         "aliexpress_affiliate_product_query_response", {}
     )
 
-    result = response_data.get("resp_result", {}).get("result", {})
-    products = result.get("products", {}).get("product", [])
+    result = response_data.get(
+        "resp_result", {}
+    ).get("result", {})
+
+    return result.get(
+        "products", {}
+    ).get("product", [])
+
+
+def find_best_deal():
+    all_products = []
+
+    for keyword in DOG_SEARCHES:
+        try:
+            products = search_products(keyword)
+            all_products.extend(products)
+        except Exception as error:
+            print(f"Search failed for {keyword}: {error}")
+
+    if not all_products:
+        raise RuntimeError("No dog products found.")
+
+    # Remove duplicate product IDs
+    unique_products = {}
+
+    for product in all_products:
+        product_id = str(product.get("product_id", ""))
+
+        if product_id:
+            unique_products[product_id] = product
+
+    products = list(unique_products.values())
 
     if not products:
-        raise RuntimeError("No AliExpress products found.")
+        raise RuntimeError("No unique products found.")
+
+    products.sort(
+        key=product_score,
+        reverse=True
+    )
 
     return products[0]
 
 
 # =========================
-# GENERATE AFFILIATE LINK
+# AFFILIATE LINK
 # =========================
 
 def generate_affiliate_link(product_url):
@@ -121,34 +233,65 @@ def generate_affiliate_link(product_url):
         "aliexpress_affiliate_link_generate_response", {}
     )
 
-    result = response_data.get("resp_result", {}).get("result", {})
-    links = result.get("promotion_links", {}).get("promotion_link", [])
+    result = response_data.get(
+        "resp_result", {}
+    ).get("result", {})
+
+    links = result.get(
+        "promotion_links", {}
+    ).get("promotion_link", [])
 
     if not links:
-        raise RuntimeError("No affiliate link returned.")
+        raise RuntimeError(
+            "No affiliate link returned."
+        )
 
     return links[0]["promotion_link"]
 
 
 # =========================
-# TELEGRAM
+# TELEGRAM POST
 # =========================
 
 def send_product_to_telegram(product, affiliate_link):
-    title = product.get("product_title", "AliExpress Deal")
-
-    price = (
-        product.get("target_sale_price")
-        or product.get("sale_price")
-        or "See current price"
+    title = product.get(
+        "product_title",
+        "מוצר לכלבים"
     )
 
-    image_url = product.get("product_main_image_url", "")
+    sale_price = (
+        product.get("target_sale_price")
+        or product.get("sale_price")
+        or "בדקו בקישור"
+    )
 
-    message = (
-        f"🐶 {title}\n\n"
-        f"💰 מחיר: {price}\n\n"
-        f"🛒 להזמנה:\n{affiliate_link}"
+    original_price = (
+        product.get("target_original_price")
+        or product.get("original_price")
+    )
+
+    discount = get_discount(product)
+
+    image_url = product.get(
+        "product_main_image_url", ""
+    )
+
+    message = "🐶🔥 מציאה לכלב!\n\n"
+
+    message += f"{title}\n\n"
+
+    if discount > 0:
+        message += f"🏷️ הנחה של כ-{discount:.0f}%\n"
+
+    if original_price:
+        message += f"❌ מחיר קודם: {original_price} ₪\n"
+
+    message += f"💰 מחיר עכשיו: {sale_price} ₪\n\n"
+
+    message += (
+        "🛒 להזמנה ב-AliExpress:\n"
+        f"{affiliate_link}\n\n"
+        "⚠️ המחיר והזמינות עשויים להשתנות."
     )
 
     if image_url:
@@ -178,32 +321,60 @@ def send_product_to_telegram(product, affiliate_link):
 
 
 # =========================
+# POST ONE DEAL
+# =========================
+
+def post_deal():
+    print("Searching for a dog deal...")
+
+    product = find_best_deal()
+
+    print(
+        "Selected product:",
+        product.get("product_title")
+    )
+
+    print(
+        "Discount:",
+        get_discount(product)
+    )
+
+    product_url = product.get(
+        "product_detail_url"
+    )
+
+    if not product_url:
+        raise RuntimeError(
+            "Product has no product_detail_url."
+        )
+
+    affiliate_link = generate_affiliate_link(
+        product_url
+    )
+
+    send_product_to_telegram(
+        product,
+        affiliate_link
+    )
+
+    print("Deal posted successfully.")
+
+
+# =========================
 # MAIN
 # =========================
 
 def main():
-    print("Metziot Express bot started successfully.")
-
-    product = find_product()
-
-    print("Product found:")
-    print(product.get("product_title"))
-
-    product_url = product.get("product_detail_url")
-
-    if not product_url:
-        raise RuntimeError("Product has no product_detail_url.")
-
-    affiliate_link = generate_affiliate_link(product_url)
-
-    print("Affiliate link generated successfully.")
-
-    send_product_to_telegram(product, affiliate_link)
-
-    print("Product posted successfully to Telegram.")
+    print("Metziot Express bot started.")
 
     while True:
-        time.sleep(60)
+        try:
+            post_deal()
+        except Exception as error:
+            print("ERROR:", error)
+
+        print("Waiting 3 hours...")
+        time.sleep(POST_INTERVAL)
 
 
 if __name__ == "__main__":
