@@ -48,7 +48,6 @@ def sign_aliexpress_request(params):
         hashlib.sha256
     ).hexdigest().upper()
 
-
 def test_aliexpress_api():
     params = {
         "app_key": ALIEXPRESS_APP_KEY,
@@ -73,7 +72,6 @@ def test_aliexpress_api():
 
     print("AliExpress HTTP status:", response.status_code)
     print("AliExpress response:", response.text)
-
 
 def main():
     print("Metziot Express bot started successfully.")
