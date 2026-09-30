@@ -22,68 +22,110 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 POST_INTERVAL = 3 * 60 * 60
 
 
-# More specific searches — no generic "dog accessories"
+# =========================
+# VERY SPECIFIC DOG SEARCHES
+# =========================
+
 DOG_SEARCHES = [
     "dog chew toy",
+    "dog rope toy",
     "dog interactive toy",
-    "dog leash",
-    "dog harness",
-    "dog collar",
-    "dog bed",
+    "dog squeaky toy",
+    "dog leash walking",
+    "dog harness walking",
+    "dog collar adjustable",
     "dog grooming brush",
+    "dog deshedding brush",
     "dog nail clipper",
     "dog food bowl",
-    "dog water bottle",
+    "dog slow feeder bowl",
+    "dog portable water bottle",
+    "dog poop bag dispenser",
     "dog car seat cover",
-    "dog poop bag holder",
-    "dog training toy",
+    "dog training treat pouch",
 ]
 
 
-# Words that indicate an actual dog product
-DOG_PRODUCT_WORDS = [
-    "dog",
-    "puppy",
-    "pet",
-    "leash",
-    "harness",
-    "collar",
-    "chew",
-    "grooming",
-    "bowl",
-    "poop bag",
-    "dog bed",
-    "pet bed",
-    "pet toy",
+# =========================
+# REQUIRED DOG-USE PHRASES
+# =========================
+
+DOG_USE_PHRASES = [
     "dog toy",
+    "dog toys",
+    "puppy toy",
+    "puppy toys",
+    "dog chew",
+    "chew toy",
+    "squeaky toy",
+    "dog rope",
+    "dog leash",
+    "pet leash",
+    "dog harness",
+    "pet harness",
+    "dog collar",
+    "pet collar",
+    "dog grooming",
+    "pet grooming",
+    "dog brush",
+    "pet brush",
+    "deshedding",
+    "dog nail",
+    "pet nail",
+    "dog bowl",
+    "pet bowl",
+    "slow feeder",
+    "dog water bottle",
+    "pet water bottle",
+    "dog poop bag",
+    "pet poop bag",
+    "dog seat cover",
+    "pet seat cover",
+    "dog car cover",
+    "dog treat pouch",
+    "dog training",
 ]
 
 
-# Products we do NOT want even if "dog" appears
+# Things that can mention dogs but are not products FOR dogs
 BLOCKED_WORDS = [
     "sticker",
     "decal",
     "poster",
     "painting",
+    "canvas",
     "wall art",
-    "t-shirt",
-    "shirt",
-    "hoodie",
+    "wall decor",
+    "ornament",
+    "figurine",
+    "statue",
     "keychain",
     "key chain",
     "phone case",
-    "jewelry",
+    "iphone case",
     "necklace",
-    "earring",
     "bracelet",
-    "figurine",
-    "ornament",
+    "earring",
+    "jewelry",
+    "t-shirt",
+    "tshirt",
+    "shirt",
+    "hoodie",
+    "sweatshirt",
+    "socks",
+    "slippers",
+    "pajama",
+    "costume for women",
+    "costume for men",
     "plush doll",
+    "stuffed doll",
+    "mug",
+    "cup for human",
 ]
 
 
 # =========================
-# ALIEXPRESS SIGNATURE
+# SIGNATURE
 # =========================
 
 def sign_aliexpress_request(params):
@@ -93,11 +135,9 @@ def sign_aliexpress_request(params):
         if key != "sign" and value is not None
     }
 
-    sorted_params = sorted(params_to_sign.items())
-
     sign_string = "".join(
         key + value
-        for key, value in sorted_params
+        for key, value in sorted(params_to_sign.items())
     )
 
     return hmac.new(
@@ -129,7 +169,6 @@ def call_aliexpress(method, business_params):
     )
 
     print("AliExpress status:", response.status_code)
-    print("AliExpress response:", response.text[:1000])
 
     response.raise_for_status()
 
@@ -144,7 +183,7 @@ def call_aliexpress(method, business_params):
 
 
 # =========================
-# PRODUCT HELPERS
+# NUMBERS / PRICES
 # =========================
 
 def number(value, default=0):
@@ -188,9 +227,7 @@ def get_commission(product):
 
 
 def get_discount(product):
-    discount = number(
-        product.get("discount")
-    )
+    discount = number(product.get("discount"))
 
     if discount > 0:
         return discount
@@ -207,75 +244,64 @@ def get_discount(product):
 
 
 # =========================
-# DOG PRODUCT FILTER
+# STRICT DOG FILTER
 # =========================
 
 def is_real_dog_product(product):
-    # We search the English title too if AliExpress provides it.
     title = str(
         product.get("product_title", "")
     ).lower()
 
-    # Reject obvious unrelated merchandise.
-    for blocked_word in BLOCKED_WORDS:
-        if blocked_word in title:
-            print(
-                "Rejected unrelated product:",
-                title[:100]
-            )
+    if not title:
+        return False
+
+    # First reject obvious human/decorative merchandise
+    for blocked in BLOCKED_WORDS:
+        if blocked in title:
+            print("BLOCKED:", title[:120])
             return False
 
-    # Product must contain a genuine dog/pet-use term.
-    for dog_word in DOG_PRODUCT_WORDS:
-        if dog_word in title:
+    # Important:
+    # "dog" by itself is NOT enough.
+    # We require a phrase describing something actually used by a dog.
+    for phrase in DOG_USE_PHRASES:
+        if phrase in title:
+            print("DOG PRODUCT:", title[:120])
             return True
 
-    print(
-        "Rejected non-dog product:",
-        title[:100]
-    )
-
+    print("NOT DOG PRODUCT:", title[:120])
     return False
 
 
 # =========================
-# DEAL QUALITY
+# DEAL FILTER / SCORE
 # =========================
 
-def is_reasonable_deal(product):
+def is_good_deal(product):
     if not is_real_dog_product(product):
         return False
 
-    sale_price = get_sale_price(product)
+    price = get_sale_price(product)
     discount = get_discount(product)
     orders = get_orders(product)
 
-    if sale_price <= 0:
+    if price <= 0:
         return False
 
-    # Avoid weak "deals".
-    if discount < 10 and orders < 100:
+    # Must show some evidence of being a worthwhile deal
+    if discount < 15 and orders < 100:
         return False
 
     return True
 
 
 def product_score(product):
-    sale_price = get_sale_price(product)
-
-    if sale_price <= 0:
-        return -1
-
     discount = get_discount(product)
     orders = get_orders(product)
     commission = get_commission(product)
 
-    score = 0
+    score = min(discount, 70) * 4
 
-    # Discount
-    score += min(discount, 70) * 4
-
-    # Sales/popularity
     if orders >= 10000:
         score += 180
     elif orders >= 5000:
@@ -289,24 +315,20 @@ def product_score(product):
     elif orders >= 20:
         score += 25
 
-    # Extra bonus for a meaningful discount
     if discount >= 50:
         score += 70
     elif discount >= 30:
         score += 50
     elif discount >= 20:
         score += 30
-    elif discount >= 10:
-        score += 10
 
-    # Commission is useful but not the main factor
     score += min(commission, 20) * 2
 
     return score
 
 
 # =========================
-# SEARCH PRODUCTS
+# SEARCH IN ENGLISH
 # =========================
 
 def search_products(keyword):
@@ -319,8 +341,9 @@ def search_products(keyword):
             "ship_to_country": "IL",
             "target_currency": "ILS",
 
-            # Hebrew title for Telegram
-            "target_language": "HE",
+            # IMPORTANT:
+            # English is used for accurate filtering.
+            "target_language": "EN",
         },
     )
 
@@ -347,73 +370,101 @@ def search_products(keyword):
 
 
 def find_best_deal():
-    all_products = []
+    candidates = {}
 
     for keyword in DOG_SEARCHES:
         try:
             products = search_products(keyword)
-            all_products.extend(products)
+
+            for product in products:
+                product_id = str(
+                    product.get("product_id", "")
+                )
+
+                if product_id and is_good_deal(product):
+                    candidates[product_id] = product
 
         except Exception as error:
             print(
                 f"Search failed for {keyword}: {error}"
             )
 
-    if not all_products:
+    if not candidates:
         raise RuntimeError(
-            "No dog products found."
+            "No genuine dog deals found."
         )
 
-    # Remove duplicates
-    unique_products = {}
+    products = list(candidates.values())
 
-    for product in all_products:
-        product_id = str(
-            product.get("product_id", "")
-        )
-
-        if product_id:
-            unique_products[product_id] = product
-
-    suitable_products = [
-        product
-        for product in unique_products.values()
-        if is_reasonable_deal(product)
-    ]
-
-    if not suitable_products:
-        raise RuntimeError(
-            "No suitable dog deals found."
-        )
-
-    suitable_products.sort(
+    products.sort(
         key=product_score,
         reverse=True,
     )
 
-    best_product = suitable_products[0]
+    best = products[0]
 
-    print(
-        "Selected product:",
-        best_product.get("product_title")
-    )
+    print("SELECTED:", best.get("product_title"))
+    print("DISCOUNT:", get_discount(best))
+    print("ORDERS:", get_orders(best))
+    print("SCORE:", product_score(best))
 
-    print(
-        "Best deal score:",
-        product_score(best_product)
-    )
+    return best
 
-    print(
-        "Discount:",
-        get_discount(best_product)
-    )
 
-    print(
-        "Orders:",
-        get_orders(best_product)
-    )
+# =========================
+# HEBREW DISPLAY TITLE
+# =========================
 
-    return best_product
+def hebrew_title(product):
+    title = str(
+        product.get("product_title", "")
+    ).lower()
+
+    if "harness" in title:
+        return "רתמה נוחה לכלב 🐕"
+
+    if "leash" in title:
+        return "רצועה שימושית לטיולים עם הכלב 🐕‍🦺"
+
+    if "collar" in title:
+        return "קולר לכלב 🐶"
+
+    if "slow feeder" in title:
+        return "קערת האכלה איטית לכלב 🥣"
+
+    if "bowl" in title:
+        return "קערת אוכל או מים לכלב 🥣"
+
+    if "water bottle" in title:
+        return "בקבוק מים נייד לכלב 💧"
+
+    if "grooming" in title or "brush" in title:
+        return "אביזר טיפוח שימושי לכלב 🐶"
+
+    if "nail" in title:
+        return "קוצץ ציפורניים לכלבים 🐾"
+
+    if "poop bag" in title:
+        return "מתקן לשקיות איסוף לכלב 🐕"
+
+    if "seat cover" in title or "car cover" in title:
+        return "כיסוי לרכב לנסיעה עם הכלב 🚗🐶"
+
+    if "treat pouch" in title:
+        return "תיק חטיפים לאילוף הכלב 🦴"
+
+    if "training" in title:
+        return "אביזר אילוף לכלב 🐕"
+
+    if (
+        "toy" in title
+        or "chew" in title
+        or "squeaky" in title
+        or "rope" in title
+    ):
+        return "צעצוע כיפי לכלב 🐶🦴"
+
+    return "אביזר שימושי לכלב 🐶"
 
 
 # =========================
@@ -463,14 +514,8 @@ def generate_affiliate_link(product_url):
 # TELEGRAM
 # =========================
 
-def send_product_to_telegram(
-    product,
-    affiliate_link,
-):
-    title = product.get(
-        "product_title",
-        "מוצר שווה לכלבים 🐶",
-    )
+def send_product_to_telegram(product, affiliate_link):
+    title = hebrew_title(product)
 
     sale_price = (
         product.get("target_sale_price")
@@ -547,21 +592,16 @@ def send_product_to_telegram(
         response.status_code,
     )
 
-    print(
-        "Telegram response:",
-        response.text,
-    )
-
     response.raise_for_status()
 
 
 # =========================
-# POST ONE DEAL
+# POST
 # =========================
 
 def post_deal():
     print(
-        "Searching for a real dog deal..."
+        "Searching for genuine dog products..."
     )
 
     product = find_best_deal()
@@ -572,7 +612,7 @@ def post_deal():
 
     if not product_url:
         raise RuntimeError(
-            "Product has no product_detail_url."
+            "Product has no URL."
         )
 
     affiliate_link = generate_affiliate_link(
@@ -585,7 +625,7 @@ def post_deal():
     )
 
     print(
-        "Dog deal posted successfully."
+        "Genuine dog deal posted successfully."
     )
 
 
