@@ -3,10 +3,10 @@ import time
 import hmac
 import hashlib
 import requests
-from datetime import datetime
+
 
 # =========================
-# ENVIRONMENT VARIABLES
+# SETTINGS
 # =========================
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -16,8 +16,7 @@ ALIEXPRESS_APP_KEY = os.environ["ALIEXPRESS_APP_KEY"]
 ALIEXPRESS_APP_SECRET = os.environ["ALIEXPRESS_APP_SECRET"]
 ALIEXPRESS_TRACKING_ID = os.environ["ALIEXPRESS_TRACKING_ID"]
 
-# Official Affiliate API gateway
-ALIEXPRESS_URL = "https://eco.taobao.com/router/rest"
+ALIEXPRESS_URL = "https://api-sg.aliexpress.com/sync"
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -46,18 +45,23 @@ def send_message(text):
 # =========================
 
 def sign_aliexpress_request(params):
-    sorted_params = sorted(params.items())
+    params_to_sign = {
+        key: str(value)
+        for key, value in params.items()
+        if key != "sign" and value is not None
+    }
+
+    sorted_params = sorted(params_to_sign.items())
 
     sign_string = "".join(
-        str(key) + str(value)
+        key + value
         for key, value in sorted_params
-        if key != "sign" and value is not None
     )
 
     signature = hmac.new(
         ALIEXPRESS_APP_SECRET.encode("utf-8"),
         sign_string.encode("utf-8"),
-        hashlib.md5,
+        hashlib.sha256,
     ).hexdigest().upper()
 
     return signature
@@ -68,16 +72,12 @@ def sign_aliexpress_request(params):
 # =========================
 
 def test_aliexpress_api():
-
     params = {
-        "method": "aliexpress.affiliate.product.query",
         "app_key": ALIEXPRESS_APP_KEY,
-        "sign_method": "hmac",
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "format": "json",
-        "v": "2.0",
+        "timestamp": str(int(time.time() * 1000)),
+        "sign_method": "sha256",
+        "method": "aliexpress.affiliate.product.query",
 
-        # Product search
         "keywords": "dog",
         "page_no": "1",
         "page_size": "5",
@@ -89,9 +89,9 @@ def test_aliexpress_api():
 
     params["sign"] = sign_aliexpress_request(params)
 
-    response = requests.post(
+    response = requests.get(
         ALIEXPRESS_URL,
-        data=params,
+        params=params,
         timeout=30,
     )
 
@@ -106,7 +106,6 @@ def test_aliexpress_api():
 # =========================
 
 def main():
-
     print("Metziot Express bot started successfully.")
     print("Testing AliExpress Affiliate API...")
 
