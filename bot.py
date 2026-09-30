@@ -19,10 +19,10 @@ ALIEXPRESS_TRACKING_ID = os.environ["ALIEXPRESS_TRACKING_ID"]
 ALIEXPRESS_URL = "https://api-sg.aliexpress.com/sync"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# 3 hours
+# Publish every 3 hours
 POST_INTERVAL = 3 * 60 * 60
 
-# Different searches so the channel has variety
+# Dog-product searches
 DOG_SEARCHES = [
     "dog toys",
     "dog accessories",
@@ -124,7 +124,9 @@ def get_discount(product):
     )
 
     if original > 0 and sale > 0 and sale < original:
-        return round((original - sale) / original * 100)
+        return round(
+            (original - sale) / original * 100
+        )
 
     return 0
 
@@ -141,8 +143,8 @@ def product_score(product):
         product.get("commission_rate")
     )
 
-    # Discount is the main priority.
-    # Sales and commission are secondary signals.
+    # Biggest priority = real discount.
+    # Sales/popularity and commission are secondary.
     return (
         discount * 10
         + min(orders, 10000) / 100
@@ -151,7 +153,7 @@ def product_score(product):
 
 
 # =========================
-# FIND DEALS
+# FIND DOG DEALS
 # =========================
 
 def search_products(keyword):
@@ -163,21 +165,32 @@ def search_products(keyword):
             "page_size": "20",
             "ship_to_country": "IL",
             "target_currency": "ILS",
-            "target_language": "EN",
+
+            # Ask AliExpress for Hebrew
+            "target_language": "HE",
         },
     )
 
     response_data = data.get(
-        "aliexpress_affiliate_product_query_response", {}
+        "aliexpress_affiliate_product_query_response",
+        {},
     )
 
     result = response_data.get(
-        "resp_result", {}
-    ).get("result", {})
+        "resp_result",
+        {},
+    ).get(
+        "result",
+        {},
+    )
 
     return result.get(
-        "products", {}
-    ).get("product", [])
+        "products",
+        {},
+    ).get(
+        "product",
+        [],
+    )
 
 
 def find_best_deal():
@@ -187,29 +200,40 @@ def find_best_deal():
         try:
             products = search_products(keyword)
             all_products.extend(products)
+
         except Exception as error:
-            print(f"Search failed for {keyword}: {error}")
+            print(
+                f"Search failed for {keyword}: {error}"
+            )
 
     if not all_products:
-        raise RuntimeError("No dog products found.")
+        raise RuntimeError(
+            "No dog products found."
+        )
 
-    # Remove duplicate product IDs
+    # Remove duplicates
     unique_products = {}
 
     for product in all_products:
-        product_id = str(product.get("product_id", ""))
+        product_id = str(
+            product.get("product_id", "")
+        )
 
         if product_id:
             unique_products[product_id] = product
 
-    products = list(unique_products.values())
+    products = list(
+        unique_products.values()
+    )
 
     if not products:
-        raise RuntimeError("No unique products found.")
+        raise RuntimeError(
+            "No unique products found."
+        )
 
     products.sort(
         key=product_score,
-        reverse=True
+        reverse=True,
     )
 
     return products[0]
@@ -230,16 +254,25 @@ def generate_affiliate_link(product_url):
     )
 
     response_data = data.get(
-        "aliexpress_affiliate_link_generate_response", {}
+        "aliexpress_affiliate_link_generate_response",
+        {},
     )
 
     result = response_data.get(
-        "resp_result", {}
-    ).get("result", {})
+        "resp_result",
+        {},
+    ).get(
+        "result",
+        {},
+    )
 
     links = result.get(
-        "promotion_links", {}
-    ).get("promotion_link", [])
+        "promotion_links",
+        {},
+    ).get(
+        "promotion_link",
+        [],
+    )
 
     if not links:
         raise RuntimeError(
@@ -250,13 +283,16 @@ def generate_affiliate_link(product_url):
 
 
 # =========================
-# TELEGRAM POST
+# TELEGRAM
 # =========================
 
-def send_product_to_telegram(product, affiliate_link):
+def send_product_to_telegram(
+    product,
+    affiliate_link,
+):
     title = product.get(
         "product_title",
-        "מוצר לכלבים"
+        "מוצר שווה לכלבים 🐶",
     )
 
     sale_price = (
@@ -273,25 +309,31 @@ def send_product_to_telegram(product, affiliate_link):
     discount = get_discount(product)
 
     image_url = product.get(
-        "product_main_image_url", ""
+        "product_main_image_url",
+        "",
     )
 
-    message = "🐶🔥 מציאה לכלב!\n\n"
-
-    message += f"{title}\n\n"
+    # Build a fully Hebrew-style post
+    message = (
+        "🐶🔥 מציאה שווה לכלב שלכם!\n\n"
+        f"⭐ {title}\n\n"
+    )
 
     if discount > 0:
-        message += f"🏷️ הנחה של כ-{discount:.0f}%\n"
+        message += (
+            f"🏷️ הנחה של כ-{discount:.0f}%\n"
+        )
 
     if original_price:
-        message += f"❌ מחיר קודם: {original_price} ₪\n"
-
-    message += f"💰 מחיר עכשיו: {sale_price} ₪\n\n"
+        message += (
+            f"❌ במקום: {original_price} ₪\n"
+        )
 
     message += (
-        "🛒 להזמנה ב-AliExpress:\n"
+        f"💰 עכשיו רק: {sale_price} ₪\n\n"
+        "🛒 לרכישה ב-AliExpress:\n"
         f"{affiliate_link}\n\n"
-        "⚠️ המחיר והזמינות עשויים להשתנות."
+        "⏰ המחיר והמבצע עשויים להשתנות."
     )
 
     if image_url:
@@ -304,6 +346,7 @@ def send_product_to_telegram(product, affiliate_link):
             },
             timeout=30,
         )
+
     else:
         response = requests.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -314,8 +357,15 @@ def send_product_to_telegram(product, affiliate_link):
             timeout=30,
         )
 
-    print("Telegram status:", response.status_code)
-    print("Telegram response:", response.text)
+    print(
+        "Telegram status:",
+        response.status_code,
+    )
+
+    print(
+        "Telegram response:",
+        response.text,
+    )
 
     response.raise_for_status()
 
@@ -325,18 +375,20 @@ def send_product_to_telegram(product, affiliate_link):
 # =========================
 
 def post_deal():
-    print("Searching for a dog deal...")
+    print(
+        "Searching for the best dog deal..."
+    )
 
     product = find_best_deal()
 
     print(
         "Selected product:",
-        product.get("product_title")
+        product.get("product_title"),
     )
 
     print(
         "Discount:",
-        get_discount(product)
+        get_discount(product),
     )
 
     product_url = product.get(
@@ -348,16 +400,20 @@ def post_deal():
             "Product has no product_detail_url."
         )
 
-    affiliate_link = generate_affiliate_link(
-        product_url
+    affiliate_link = (
+        generate_affiliate_link(
+            product_url
+        )
     )
 
     send_product_to_telegram(
         product,
-        affiliate_link
+        affiliate_link,
     )
 
-    print("Deal posted successfully.")
+    print(
+        "Deal posted successfully."
+    )
 
 
 # =========================
@@ -365,16 +421,27 @@ def post_deal():
 # =========================
 
 def main():
-    print("Metziot Express bot started.")
+    print(
+        "Metziot Express bot started."
+    )
 
     while True:
         try:
             post_deal()
-        except Exception as error:
-            print("ERROR:", error)
 
-        print("Waiting 3 hours...")
-        time.sleep(POST_INTERVAL)
+        except Exception as error:
+            print(
+                "ERROR:",
+                error,
+            )
+
+        print(
+            "Waiting 3 hours..."
+        )
+
+        time.sleep(
+            POST_INTERVAL
+        )
 
 
 if __name__ == "__main__":
