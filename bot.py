@@ -22,7 +22,6 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # Publish every 3 hours
 POST_INTERVAL = 3 * 60 * 60
 
-# Dog-product searches
 DOG_SEARCHES = [
     "dog toys",
     "dog accessories",
@@ -32,6 +31,8 @@ DOG_SEARCHES = [
     "dog grooming",
     "dog bowl",
     "dog car accessories",
+    "dog training",
+    "dog travel",
 ]
 
 
@@ -102,26 +103,53 @@ def call_aliexpress(method, business_params):
 
 def number(value, default=0):
     try:
-        return float(value)
+        if value is None:
+            return default
+
+        text = str(value).replace("%", "").strip()
+        return float(text)
+
     except (TypeError, ValueError):
         return default
 
 
-def get_discount(product):
-    discount = number(product.get("discount"))
+def get_sale_price(product):
+    return number(
+        product.get("target_sale_price")
+        or product.get("sale_price")
+    )
 
-    if discount > 0:
-        return discount
 
-    original = number(
+def get_original_price(product):
+    return number(
         product.get("target_original_price")
         or product.get("original_price")
     )
 
-    sale = number(
-        product.get("target_sale_price")
-        or product.get("sale_price")
+
+def get_orders(product):
+    return number(
+        product.get("lastest_volume")
+        or product.get("volume")
     )
+
+
+def get_commission(product):
+    return number(
+        product.get("commission_rate")
+    )
+
+
+def get_discount(product):
+    discount = number(
+        product.get("discount")
+    )
+
+    if discount > 0:
+        return discount
+
+    original = get_original_price(product)
+    sale = get_sale_price(product)
 
     if original > 0 and sale > 0 and sale < original:
         return round(
@@ -131,29 +159,74 @@ def get_discount(product):
     return 0
 
 
+# =========================
+# DEAL QUALITY
+# =========================
+
 def product_score(product):
     discount = get_discount(product)
+    orders = get_orders(product)
+    commission = get_commission(product)
+    sale_price = get_sale_price(product)
 
-    orders = number(
-        product.get("lastest_volume")
-        or product.get("volume")
-    )
+    # Reject products without a usable price.
+    if sale_price <= 0:
+        return -1
 
-    commission = number(
-        product.get("commission_rate")
-    )
+    score = 0
 
-    # Biggest priority = real discount.
-    # Sales/popularity and commission are secondary.
-    return (
-        discount * 10
-        + min(orders, 10000) / 100
-        + commission
-    )
+    # Discount matters, but does not dominate everything.
+    score += min(discount, 70) * 4
+
+    # Proven sales are a strong quality signal.
+    if orders >= 10000:
+        score += 180
+    elif orders >= 5000:
+        score += 150
+    elif orders >= 1000:
+        score += 120
+    elif orders >= 500:
+        score += 90
+    elif orders >= 100:
+        score += 60
+    elif orders >= 20:
+        score += 25
+
+    # Give some preference to products with meaningful discounts.
+    if discount >= 50:
+        score += 70
+    elif discount >= 30:
+        score += 50
+    elif discount >= 20:
+        score += 30
+    elif discount >= 10:
+        score += 10
+
+    # Commission matters to us, but should not make a bad
+    # product become the top recommendation.
+    score += min(commission, 20) * 2
+
+    return score
+
+
+def is_reasonable_deal(product):
+    sale_price = get_sale_price(product)
+    discount = get_discount(product)
+    orders = get_orders(product)
+
+    if sale_price <= 0:
+        return False
+
+    # We want either a meaningful discount or strong proof
+    # that people are actually buying the product.
+    if discount < 10 and orders < 100:
+        return False
+
+    return True
 
 
 # =========================
-# FIND DOG DEALS
+# SEARCH PRODUCTS
 # =========================
 
 def search_products(keyword):
@@ -165,8 +238,6 @@ def search_products(keyword):
             "page_size": "20",
             "ship_to_country": "IL",
             "target_currency": "ILS",
-
-            # Ask AliExpress for Hebrew
             "target_language": "HE",
         },
     )
@@ -211,7 +282,7 @@ def find_best_deal():
             "No dog products found."
         )
 
-    # Remove duplicates
+    # Remove duplicate products.
     unique_products = {}
 
     for product in all_products:
@@ -222,13 +293,15 @@ def find_best_deal():
         if product_id:
             unique_products[product_id] = product
 
-    products = list(
-        unique_products.values()
-    )
+    products = [
+        product
+        for product in unique_products.values()
+        if is_reasonable_deal(product)
+    ]
 
     if not products:
         raise RuntimeError(
-            "No unique products found."
+            "No suitable dog deals found."
         )
 
     products.sort(
@@ -236,7 +309,24 @@ def find_best_deal():
         reverse=True,
     )
 
-    return products[0]
+    best_product = products[0]
+
+    print(
+        "Best deal score:",
+        product_score(best_product),
+    )
+
+    print(
+        "Orders:",
+        get_orders(best_product),
+    )
+
+    print(
+        "Commission:",
+        get_commission(best_product),
+    )
+
+    return best_product
 
 
 # =========================
@@ -307,13 +397,13 @@ def send_product_to_telegram(
     )
 
     discount = get_discount(product)
+    orders = get_orders(product)
 
     image_url = product.get(
         "product_main_image_url",
         "",
     )
 
-    # Build a fully Hebrew-style post
     message = (
         "🐶🔥 מציאה שווה לכלב שלכם!\n\n"
         f"⭐ {title}\n\n"
@@ -330,8 +420,16 @@ def send_product_to_telegram(
         )
 
     message += (
-        f"💰 עכשיו רק: {sale_price} ₪\n\n"
-        "🛒 לרכישה ב-AliExpress:\n"
+        f"💰 עכשיו רק: {sale_price} ₪\n"
+    )
+
+    if orders >= 100:
+        message += (
+            f"🔥 כבר נמכרו מעל {int(orders):,} יחידות\n"
+        )
+
+    message += (
+        "\n🛒 לרכישה ב-AliExpress:\n"
         f"{affiliate_link}\n\n"
         "⏰ המחיר והמבצע עשויים להשתנות."
     )
