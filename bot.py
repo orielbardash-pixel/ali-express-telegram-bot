@@ -19,20 +19,66 @@ ALIEXPRESS_TRACKING_ID = os.environ["ALIEXPRESS_TRACKING_ID"]
 ALIEXPRESS_URL = "https://api-sg.aliexpress.com/sync"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Publish every 3 hours
 POST_INTERVAL = 3 * 60 * 60
 
+
+# More specific searches — no generic "dog accessories"
 DOG_SEARCHES = [
-    "dog toys",
-    "dog accessories",
+    "dog chew toy",
+    "dog interactive toy",
     "dog leash",
+    "dog harness",
     "dog collar",
     "dog bed",
-    "dog grooming",
-    "dog bowl",
-    "dog car accessories",
-    "dog training",
-    "dog travel",
+    "dog grooming brush",
+    "dog nail clipper",
+    "dog food bowl",
+    "dog water bottle",
+    "dog car seat cover",
+    "dog poop bag holder",
+    "dog training toy",
+]
+
+
+# Words that indicate an actual dog product
+DOG_PRODUCT_WORDS = [
+    "dog",
+    "puppy",
+    "pet",
+    "leash",
+    "harness",
+    "collar",
+    "chew",
+    "grooming",
+    "bowl",
+    "poop bag",
+    "dog bed",
+    "pet bed",
+    "pet toy",
+    "dog toy",
+]
+
+
+# Products we do NOT want even if "dog" appears
+BLOCKED_WORDS = [
+    "sticker",
+    "decal",
+    "poster",
+    "painting",
+    "wall art",
+    "t-shirt",
+    "shirt",
+    "hoodie",
+    "keychain",
+    "key chain",
+    "phone case",
+    "jewelry",
+    "necklace",
+    "earring",
+    "bracelet",
+    "figurine",
+    "ornament",
+    "plush doll",
 ]
 
 
@@ -106,8 +152,9 @@ def number(value, default=0):
         if value is None:
             return default
 
-        text = str(value).replace("%", "").strip()
-        return float(text)
+        return float(
+            str(value).replace("%", "").strip()
+        )
 
     except (TypeError, ValueError):
         return default
@@ -160,25 +207,75 @@ def get_discount(product):
 
 
 # =========================
+# DOG PRODUCT FILTER
+# =========================
+
+def is_real_dog_product(product):
+    # We search the English title too if AliExpress provides it.
+    title = str(
+        product.get("product_title", "")
+    ).lower()
+
+    # Reject obvious unrelated merchandise.
+    for blocked_word in BLOCKED_WORDS:
+        if blocked_word in title:
+            print(
+                "Rejected unrelated product:",
+                title[:100]
+            )
+            return False
+
+    # Product must contain a genuine dog/pet-use term.
+    for dog_word in DOG_PRODUCT_WORDS:
+        if dog_word in title:
+            return True
+
+    print(
+        "Rejected non-dog product:",
+        title[:100]
+    )
+
+    return False
+
+
+# =========================
 # DEAL QUALITY
 # =========================
 
-def product_score(product):
+def is_reasonable_deal(product):
+    if not is_real_dog_product(product):
+        return False
+
+    sale_price = get_sale_price(product)
     discount = get_discount(product)
     orders = get_orders(product)
-    commission = get_commission(product)
+
+    if sale_price <= 0:
+        return False
+
+    # Avoid weak "deals".
+    if discount < 10 and orders < 100:
+        return False
+
+    return True
+
+
+def product_score(product):
     sale_price = get_sale_price(product)
 
-    # Reject products without a usable price.
     if sale_price <= 0:
         return -1
 
+    discount = get_discount(product)
+    orders = get_orders(product)
+    commission = get_commission(product)
+
     score = 0
 
-    # Discount matters, but does not dominate everything.
+    # Discount
     score += min(discount, 70) * 4
 
-    # Proven sales are a strong quality signal.
+    # Sales/popularity
     if orders >= 10000:
         score += 180
     elif orders >= 5000:
@@ -192,7 +289,7 @@ def product_score(product):
     elif orders >= 20:
         score += 25
 
-    # Give some preference to products with meaningful discounts.
+    # Extra bonus for a meaningful discount
     if discount >= 50:
         score += 70
     elif discount >= 30:
@@ -202,27 +299,10 @@ def product_score(product):
     elif discount >= 10:
         score += 10
 
-    # Commission matters to us, but should not make a bad
-    # product become the top recommendation.
+    # Commission is useful but not the main factor
     score += min(commission, 20) * 2
 
     return score
-
-
-def is_reasonable_deal(product):
-    sale_price = get_sale_price(product)
-    discount = get_discount(product)
-    orders = get_orders(product)
-
-    if sale_price <= 0:
-        return False
-
-    # We want either a meaningful discount or strong proof
-    # that people are actually buying the product.
-    if discount < 10 and orders < 100:
-        return False
-
-    return True
 
 
 # =========================
@@ -238,6 +318,8 @@ def search_products(keyword):
             "page_size": "20",
             "ship_to_country": "IL",
             "target_currency": "ILS",
+
+            # Hebrew title for Telegram
             "target_language": "HE",
         },
     )
@@ -282,7 +364,7 @@ def find_best_deal():
             "No dog products found."
         )
 
-    # Remove duplicate products.
+    # Remove duplicates
     unique_products = {}
 
     for product in all_products:
@@ -293,37 +375,42 @@ def find_best_deal():
         if product_id:
             unique_products[product_id] = product
 
-    products = [
+    suitable_products = [
         product
         for product in unique_products.values()
         if is_reasonable_deal(product)
     ]
 
-    if not products:
+    if not suitable_products:
         raise RuntimeError(
             "No suitable dog deals found."
         )
 
-    products.sort(
+    suitable_products.sort(
         key=product_score,
         reverse=True,
     )
 
-    best_product = products[0]
+    best_product = suitable_products[0]
+
+    print(
+        "Selected product:",
+        best_product.get("product_title")
+    )
 
     print(
         "Best deal score:",
-        product_score(best_product),
+        product_score(best_product)
+    )
+
+    print(
+        "Discount:",
+        get_discount(best_product)
     )
 
     print(
         "Orders:",
-        get_orders(best_product),
-    )
-
-    print(
-        "Commission:",
-        get_commission(best_product),
+        get_orders(best_product)
     )
 
     return best_product
@@ -474,20 +561,10 @@ def send_product_to_telegram(
 
 def post_deal():
     print(
-        "Searching for the best dog deal..."
+        "Searching for a real dog deal..."
     )
 
     product = find_best_deal()
-
-    print(
-        "Selected product:",
-        product.get("product_title"),
-    )
-
-    print(
-        "Discount:",
-        get_discount(product),
-    )
 
     product_url = product.get(
         "product_detail_url"
@@ -498,10 +575,8 @@ def post_deal():
             "Product has no product_detail_url."
         )
 
-    affiliate_link = (
-        generate_affiliate_link(
-            product_url
-        )
+    affiliate_link = generate_affiliate_link(
+        product_url
     )
 
     send_product_to_telegram(
@@ -510,7 +585,7 @@ def post_deal():
     )
 
     print(
-        "Deal posted successfully."
+        "Dog deal posted successfully."
     )
 
 
